@@ -1,5 +1,6 @@
 # MacWallpaper
 
+![Image/example.png]()
 一个简洁高效的 macOS 动态视频壁纸应用。
 
 ## 功能特性
