@@ -76,6 +76,13 @@ import Foundation
                 keyEquivalent: "q"
             ).target = self
 
+            // Settings
+            menu.addItem(
+                withTitle: "设置",
+                action: #selector(openSettings),
+                keyEquivalent: ""
+            ).target = self
+
             statusItem?.menu = menu
         }
 
@@ -151,6 +158,16 @@ import Foundation
 
         @objc private func quit() {
             NSApp.terminate(nil)
+        }
+
+        @objc private func openSettings() {
+            if let appDelegate = NSApp.delegate as? AppDelegate,
+                let wallpaperEngine = appDelegate.wallpaperEngine
+            {
+                let settingsPanel = SettingsPanel(wallpaperEngine: wallpaperEngine)
+                settingsPanel.showWindow(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
     }
 #endif

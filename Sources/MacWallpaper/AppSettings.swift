@@ -5,12 +5,15 @@ import Foundation
 
     /// Global application settings manager
     struct AppSettings: Codable {
+        // Smart pause: when enabled, other auto-pause options are forced on and locked
+        var smartPause: Bool = false
         // UI Settings
         var showToolbarLabels: Bool = false
 
         // Auto-pause Settings
-        var pauseWhenWindowMaximized: Bool = false
-        var pauseWhenLowPowerMode: Bool = false
+        // Defaults set to true so that when smartPause is disabled they remain enabled
+        var pauseWhenWindowMaximized: Bool = true
+        var pauseWhenLowPowerMode: Bool = true
 
         // UserDefaults key
         private static let settingsKey = "AppSettings"

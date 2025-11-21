@@ -6,6 +6,10 @@ import Foundation
     class SettingsPanel: NSWindowController {
         private var wallpaperEngine: WallpaperEngine
         private var appSettings: AppSettings
+        // Keep references to controls that need dynamic enable/disable
+        private var smartPauseCheckbox: NSButton?
+        private var pauseMaximizedCheckbox: NSButton?
+        private var pauseLowPowerCheckbox: NSButton?
 
         init(wallpaperEngine: WallpaperEngine) {
             self.wallpaperEngine = wallpaperEngine
@@ -103,6 +107,15 @@ import Foundation
             autoPauseSectionLabel.font = .boldSystemFont(ofSize: 13)
             stackView.addArrangedSubview(autoPauseSectionLabel)
 
+            // Smart pause setting
+            let smartCheckbox = NSButton(
+                checkboxWithTitle: "智能暂停（自动启用其它暂停选项并锁定）",
+                target: self,
+                action: #selector(smartPauseToggled(_:)))
+            smartCheckbox.state = appSettings.smartPause ? .on : .off
+            stackView.addArrangedSubview(smartCheckbox)
+            self.smartPauseCheckbox = smartCheckbox
+
             // Pause when window maximized
             let pauseMaximizedCheckbox = NSButton(
                 checkboxWithTitle: "窗口最大化时暂停壁纸",
@@ -110,6 +123,7 @@ import Foundation
                 action: #selector(pauseMaximizedToggled(_:)))
             pauseMaximizedCheckbox.state = appSettings.pauseWhenWindowMaximized ? .on : .off
             stackView.addArrangedSubview(pauseMaximizedCheckbox)
+            self.pauseMaximizedCheckbox = pauseMaximizedCheckbox
 
             // Pause when low power mode
             let pauseLowPowerCheckbox = NSButton(
@@ -118,6 +132,10 @@ import Foundation
                 action: #selector(pauseLowPowerToggled(_:)))
             pauseLowPowerCheckbox.state = appSettings.pauseWhenLowPowerMode ? .on : .off
             stackView.addArrangedSubview(pauseLowPowerCheckbox)
+            self.pauseLowPowerCheckbox = pauseLowPowerCheckbox
+
+            // Apply smartPause constraint: when smartPause is on, force others on and disable them
+            applySmartPauseUIState()
 
             // Spacer
             let spacer = NSView()
@@ -163,15 +181,64 @@ import Foundation
         }
 
         @objc private func pauseMaximizedToggled(_ sender: NSButton) {
+            // If smartPause is enabled, ignore changes (controls should be disabled anyway)
+            guard !appSettings.smartPause else {
+                // Ensure UI reflects that it's forced on
+                sender.state = .on
+                return
+            }
+
             appSettings.pauseWhenWindowMaximized = (sender.state == .on)
             appSettings.save()
             wallpaperEngine.appSettings = appSettings
         }
 
         @objc private func pauseLowPowerToggled(_ sender: NSButton) {
+            guard !appSettings.smartPause else {
+                sender.state = .on
+                return
+            }
+
             appSettings.pauseWhenLowPowerMode = (sender.state == .on)
             appSettings.save()
             wallpaperEngine.appSettings = appSettings
+        }
+
+        @objc private func smartPauseToggled(_ sender: NSButton) {
+            let enabled = (sender.state == .on)
+            appSettings.smartPause = enabled
+
+            if enabled {
+                // Force other options on and lock them
+                appSettings.pauseWhenWindowMaximized = true
+                appSettings.pauseWhenLowPowerMode = true
+            } else {
+                // When disabled, keep 2 & 3 enabled but allow modification
+                // They already default to true in AppSettings; leave current values
+            }
+
+            appSettings.save()
+            wallpaperEngine.appSettings = appSettings
+
+            applySmartPauseUIState()
+        }
+
+        private func applySmartPauseUIState() {
+            let isSmart = appSettings.smartPause
+
+            // If smartPause is enabled, force checkboxes on and disable interaction
+            if isSmart {
+                pauseMaximizedCheckbox?.state = .on
+                pauseLowPowerCheckbox?.state = .on
+                pauseMaximizedCheckbox?.isEnabled = false
+                pauseLowPowerCheckbox?.isEnabled = false
+            } else {
+                // Keep current values but enable controls for user editing
+                pauseMaximizedCheckbox?.isEnabled = true
+                pauseLowPowerCheckbox?.isEnabled = true
+                pauseMaximizedCheckbox?.state = appSettings.pauseWhenWindowMaximized ? .on : .off
+                pauseLowPowerCheckbox?.state = appSettings.pauseWhenLowPowerMode ? .on : .off
+            }
         }
     }
 #endif

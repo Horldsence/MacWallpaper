@@ -1,0 +1,217 @@
+name: Build and Release
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch: # 允许手动触发
+
+jobs:
+    create-release:
+        name: Create Release
+        runs-on: ubuntu-latest
+        outputs:
+            upload_url: ${{ steps.create_release.outputs.upload_url }}
+            release_tag: ${{ steps.get_tag.outputs.tag }}
+        steps:
+            - name: Get tag
+              id: get_tag
+              run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+            - name: Create Release
+              id: create_release
+              uses: actions/create-release@v1
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                  tag_name: ${{ github.ref }}
+                  release_name: Release ${{ github.ref }}
+                  draft: false
+                  prerelease: false
+
+    build:
+        name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+        needs: create-release
+        runs-on: ${{ matrix.os }}
+        strategy:
+            matrix:
+                include:
+                    # macOS builds
+                    - os: macos-14
+                      arch: arm64
+                      platform: macos
+                      suffix: macos-arm64
+                    - os: macos-13
+                      arch: x86_64
+                      platform: macos
+                      suffix: macos-amd64
+
+                    # Linux builds
+                    - os: ubuntu-latest
+                      arch: x86_64
+                      platform: linux
+                      suffix: linux-amd64
+                    - os: ubuntu-latest
+                      arch: arm64
+                      platform: linux
+                      suffix: linux-arm64
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Swift
+              uses: fwal/setup-swift@v1
+              with:
+                  swift-version: "5.8"
+
+            - name: Build Release Binary
+              run: |
+                  swift build -c release --static-swift-stdlib \
+                    --build-path ".build/${{ matrix.platform }}-${{ matrix.arch }}"
+
+            - name: Create Output Directory
+              run: mkdir -p dist
+
+            - name: Package macOS Binary
+              if: matrix.platform == 'macos'
+              run: |
+                  cp .build/${{ matrix.platform }}-${{ matrix.arch }}/release/MacWallpaper dist/
+                  cd dist
+                  zip -r MacWallpaper-${{ matrix.suffix }}.zip MacWallpaper
+                  rm MacWallpaper
+
+            - name: Package Linux Binary
+              if: matrix.platform == 'linux'
+              run: |
+                  cp .build/${{ matrix.platform }}-${{ matrix.arch }}/release/MacWallpaper dist/MacWallpaper-${{ matrix.suffix }}
+                  chmod +x dist/MacWallpaper-${{ matrix.suffix }}
+
+            - name: Upload Binary Asset
+              uses: actions/upload-release-asset@v1
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                  upload_url: ${{ needs.create-release.outputs.upload_url }}
+                  asset_path: ./dist/MacWallpaper-${{ matrix.suffix }}${{ matrix.platform == 'macos' && '.zip' || '' }}
+                  asset_name: MacWallpaper-${{ matrix.suffix }}${{ matrix.platform == 'macos' && '.zip' || '' }}
+                  asset_content_type: application/octet-stream
+
+    package-linux:
+        name: Create Linux Packages
+        needs: [create-release, build]
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                arch: [amd64, arm64]
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Download Linux Binaries
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: MacWallpaper-linux-*
+                  path: binaries/
+
+            - name: Setup Docker for DEB/RPM
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y ruby ruby-dev rubygems build-essential
+                  sudo gem install fpm
+
+            - name: Create DEB Package
+              run: |
+                  mkdir -p debian/usr/local/bin
+                  cp binaries/MacWallpaper-linux-${{ matrix.arch }} debian/usr/local/bin/MacWallpaper
+                  chmod +x debian/usr/local/bin/MacWallpaper
+
+                  fpm -s dir -t deb -n "macwallpaper" -v ${{ needs.create-release.outputs.release_tag }} \
+                    -a ${{ matrix.arch }} --deb-no-default-config-files \
+                    -C debian usr/local/bin/MacWallpaper
+
+            - name: Create RPM Package
+              run: |
+                  mkdir -p rpm/usr/local/bin
+                  cp binaries/MacWallpaper-linux-${{ matrix.arch }} rpm/usr/local/bin/MacWallpaper
+                  chmod +x rpm/usr/local/bin/MacWallpaper
+
+                  fpm -s dir -t rpm -n "macwallpaper" -v ${{ needs.create-release.outputs.release_tag }} \
+                    -a ${{ matrix.arch }} \
+                    -C rpm usr/local/bin/MacWallpaper
+
+            - name: Create AppImage (AMD64 only)
+              if: matrix.arch == 'amd64'
+              run: |
+                  mkdir -p AppImage.AppDir/usr/bin
+                  cp binaries/MacWallpaper-linux-${{ matrix.arch }} AppImage.AppDir/usr/bin/MacWallpaper
+                  chmod +x AppImage.AppDir/usr/bin/MacWallpaper
+
+                  # Download linuxdeploy
+                  wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+                  chmod +x linuxdeploy-x86_64.AppImage
+
+                  # Create AppImage
+                  ./linuxdeploy-x86_64.AppImage --appdir AppImage.AppDir --output appimage
+
+            - name: Upload Linux Packages
+              uses: actions/upload-release-asset@v1
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                  upload_url: ${{ needs.create-release.outputs.upload_url }}
+                  asset_path: ./macwallpaper_${{ needs.create-release.outputs.release_tag }}_${{ matrix.arch }}.deb
+                  asset_name: MacWallpaper-${{ needs.create-release.outputs.release_tag }}-${{ matrix.arch }}.deb
+                  asset_content_type: application/vnd.debian.binary-package
+
+            - name: Upload RPM Packages
+              uses: actions/upload-release-asset@v1
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                  upload_url: ${{ needs.create-release.outputs.upload_url }}
+                  asset_path: ./macwallpaper-${{ needs.create-release.outputs.release_tag }}-1.${{ matrix.arch }}.rpm
+                  asset_name: MacWallpaper-${{ needs.create-release.outputs.release_tag }}-${{ matrix.arch }}.rpm
+                  asset_content_type: application/x-rpm
+
+            - name: Upload AppImage
+              if: matrix.arch == 'amd64'
+              uses: actions/upload-release-asset@v1
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                  upload_url: ${{ needs.create-release.outputs.upload_url }}
+                  asset_path: ./MacWallpaper-${{ needs.create-release.outputs.release_tag }}-${{ matrix.arch }}.AppImage
+                  asset_name: MacWallpaper-${{ needs.create-release.outputs.release_tag }}-${{ matrix.arch }}.AppImage
+                  asset_content_type: application/x-executable
+
+    save-artifacts:
+        name: Save Build Artifacts
+        needs: [build, package-linux]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Get current timestamp
+              id: timestamp
+              run: echo "timestamp=$(date +'%d%m%y%H%M')" >> $GITHUB_OUTPUT
+
+            - name: Download all artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: artifacts/
+
+            - name: Create archive with timestamp
+              run: |
+                  mkdir -p final-artifacts
+                  cp -r artifacts/* final-artifacts/
+                  tar -czf build-artifacts-${{ steps.timestamp.outputs.timestamp }}.tar.gz final-artifacts/
+
+            - name: Upload timestamped archive
+              uses: actions/upload-release-asset@v1
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                  upload_url: ${{ needs.create-release.outputs.upload_url }}
+                  asset_path: ./build-artifacts-${{ steps.timestamp.outputs.timestamp }}.tar.gz
+                  asset_name: build-artifacts-${{ steps.timestamp.outputs.timestamp }}.tar.gz
+                  asset_content_type: application/gzip
